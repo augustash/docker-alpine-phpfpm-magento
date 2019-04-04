@@ -1,0 +1,171 @@
+#!/usr/bin/with-contenv bash
+
+echo "============> Initializing setup"
+MAGENTO_INSTALL_STRING=${MAGENTO_INSTALL_STRING:-}
+MAGENTO_PATH=${MAGENTO_PATH:-/src}
+cd "$MAGENTO_PATH"
+
+# create project if empty
+if [[ -f "${MAGENTO_PATH}/app/etc/config.php" ]] || [[ -f "${MAGENTO_PATH}/app/etc/env.php" ]]; then
+    echo "============> Magento is already installed. Exiting setup."
+    exit
+fi
+
+if [[ ! -f "${MAGENTO_PATH}/composer.json" ]]; then
+    if [[ ! -z "${MAGENTO_VERSION}" ]]; then
+        echo "============> Installing version ${MAGENTO_VERSION}"
+        VERSION="=${MAGENTO_VERSION}"
+    else
+        echo "============> Installing latest version"
+        VERSION=""
+    fi
+
+    if [[ "${MAGENTO_CODEBASE}" = "commerce" ]]; then
+        echo "============> Installing Magento Commerce via Composer"
+        /usr/local/bin/composer.phar create-project --no-interaction --repository-url=https://repo.magento.com/ magento/project-enterprise-edition$VERSION .
+    else
+        echo "============> Installing Magento Open Source via Composer"
+        /usr/local/bin/composer.phar create-project --no-interaction --repository-url=https://repo.magento.com/ magento/project-community-edition$VERSION .
+    fi
+
+    if [[ ! -f "${MAGENTO_PATH}/composer.lock" ]]; then
+        echo "============> Installation failed! No Composer lock."
+        exit 1
+    fi
+
+    # Magento forces Composer to use $MAGENTO_ROOT/var/composer_home as the home directory
+    # when running any Composer commands through Magento, e.g. sampledata:deploy, so copy the
+    # credentials over to it to prevent Composer from asking for them again
+    mkdir -p "${MAGENTO_PATH}/var/composer_home"
+    if [[ -f "${COMPOSER_HOME}/auth.json" ]]; then
+        cp "${COMPOSER_HOME}/auth.json" "${MAGENTO_PATH}/var/composer_home/auth.json"
+    fi
+
+    echo "============> Fixing ownership"
+    chown -R "${PUID}:${PGID}" "${MAGENTO_PATH}"
+else
+    echo "============> Installing Composer dependencies"
+    /usr/local/bin/composer.phar install
+fi
+
+if [[ -f "${MAGENTO_PATH}/bin/magento" ]]; then
+    chmod +x "${MAGENTO_PATH}/bin/magento"
+else
+    echo "============> Installation failed! No 'magento' executable."
+    exit 1
+fi
+
+if [[ "${MAGENTO_USE_SAMPLE_DATA}" = true ]]; then
+    echo "============> Installing sample data dependencies"
+    "${MAGENTO_PATH}/bin/magento" sampledata:deploy
+    MAGENTO_INSTALL_STRING="${MAGENTO_INSTALL_STRING} --use-sample-data"
+fi
+
+if [[ ! -z "${MAGENTO_BACKEND_FRONTNAME}" ]]; then
+    MAGENTO_INSTALL_STRING="${MAGENTO_INSTALL_STRING} --backend-frontname=${MAGENTO_BACKEND_FRONTNAME}"
+fi
+
+if [[ ! -z "${MAGENTO_BASE_URL_SECURE}" ]]; then
+    MAGENTO_INSTALL_STRING="${MAGENTO_INSTALL_STRING} --base-url-secure=${MAGENTO_BASE_URL_SECURE} --use-secure=1 --use-secure-admin=1"
+fi
+
+if [[ "${MAGENTO_INSTALL_DB}" = true ]]; then
+    echo "============> Running Magento installer script"
+
+    "${MAGENTO_PATH}/bin/magento" setup:install \
+        --db-host=$MAGENTO_DB_HOST \
+        --db-name=$MAGENTO_DB_NAME \
+        --db-user=$MAGENTO_DB_USER \
+        --db-password=$MAGENTO_DB_PASSWORD \
+        --admin-firstname=$MAGENTO_ADMIN_FIRSTNAME \
+        --admin-lastname=$MAGENTO_ADMIN_LASTNAME \
+        --admin-email=$MAGENTO_ADMIN_EMAIL \
+        --admin-user=$MAGENTO_ADMIN_USER \
+        --admin-password=$MAGENTO_ADMIN_PASSWORD \
+        --base-url=$MAGENTO_BASE_URL \
+        --use-rewrites=$MAGENTO_REWRITES \
+        --language=$MAGENTO_LANGUAGE \
+        --currency=$MAGENTO_CURRENCY \
+        --timezone=$MAGENTO_TIMEZONE \
+        $MAGENTO_INSTALL_STRING
+
+    echo "============> Enabling developer mode"
+    "${MAGENTO_PATH}/bin/magento" deploy:mode:set developer
+
+    echo "============> Enabling logging"
+    version_compare $MAGENTO_VERSION 2.3.1
+    case $? in
+        0) op='=';;
+        1) op='>';;
+        2) op='<';;
+    esac
+    if [[ $? == 2 ]]
+    then
+        "${MAGENTO_PATH}/bin/magento" config:set \
+            dev/debug/debug_logging 1
+    else
+        "${MAGENTO_PATH}/bin/magento" setup:config:set \
+            --enable-debug-logging=true
+    fi
+
+    if [[ ! -z "${MAGENTO_REDIS_SESSION_HOST}" ]]; then
+        echo "============> Enabling Redis Sessions"
+        "${MAGENTO_PATH}/bin/magento" setup:config:set \
+            --session-save=redis \
+            --session-save-redis-host=${MAGENTO_REDIS_SESSION_HOST} \
+            --session-save-redis-port=6379 \
+            --session-save-redis-db=0 \
+            --session-save-redis-log-level=3
+        rm -f "${MAGENTO_PATH}/var/sessions"
+    fi
+
+    if [[ ! -z "${MAGENTO_REDIS_CACHE_HOST}" ]]; then
+        echo "============> Enabling Redis Caching"
+        "${MAGENTO_PATH}/bin/magento" setup:config:set \
+            --cache-backend=redis \
+            --cache-backend-redis-server=${MAGENTO_REDIS_CACHE_HOST} \
+            --cache-backend-redis-db=0
+        "${MAGENTO_PATH}/bin/magento" setup:config:set \
+            --page-cache=redis \
+            --page-cache-redis-server=${MAGENTO_REDIS_CACHE_HOST} \
+            --page-cache-redis-db=1
+        rm -f "${MAGENTO_PATH}/var/cache ${MAGENTO_PATH}/var/page_cache"
+    fi
+
+    if [[ ! -z "${MAGENTO_RABBITMQ_HOST}" ]]; then
+        echo "============> Enabling RabbitMQ"
+        "${MAGENTO_PATH}/bin/magento" setup:config:set \
+            --amqp-host=${MAGENTO_RABBITMQ_HOST} \
+            --amqp-port=${MAGENTO_RABBITMQ_PORT:-5672} \
+            --amqp-user=${MAGENTO_RABBITMQ_USER:-magento} \
+            --amqp-password=${MAGENTO_RABBITMQ_PASS:-magento}
+    fi
+
+    if [[ ! -z "${MAGENTO_ELASTICSEARCH_HOST}" ]]; then
+        echo "============> Enabling Elasticsearch"
+        "${MAGENTO_PATH}/bin/magento" config:set --lock-env \
+            catalog/search/engine "elasticsearch6"
+        "${MAGENTO_PATH}/bin/magento" config:set --lock-env \
+            catalog/search/elasticsearch6_server_hostname "${MAGENTO_ELASTICSEARCH_HOST}"
+    fi
+
+    echo "============> Clearing caches"
+    "${MAGENTO_PATH}/bin/magento" cache:flush
+
+    echo "============> Fixing permissions"
+    find "${MAGENTO_PATH}/pub" -type f -exec chmod 664 {} \;
+    find "${MAGENTO_PATH}/pub" -type d -exec chmod 775 {} \;
+    if [[ -d "${MAGENTO_PATH}/generation" ]]; then
+        find "${MAGENTO_PATH}/generation" -type d -exec chmod g+s {} \;
+    fi
+else
+    echo "============> Skipping database install"
+fi
+
+if [[ "${MAGENTO_PHPSTORM_META}" = true ]]; then
+    echo "============> Generate PHPStorm metadata"
+    mkdir -p "${MAGENTO_PATH}/.idea/"
+    "${MAGENTO_PATH}/bin/magento" dev:urn-catalog:generate "${MAGENTO_PATH}/.idea/misc.xml"
+fi
+
+echo "============> Installation complete"

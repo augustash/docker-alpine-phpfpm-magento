@@ -1,0 +1,69 @@
+version: "3"
+services:
+  alpine-phpfpm-magento:
+    build:
+      context: .
+    image: augustash/alpine-phpfpm-magento:1.0.0
+    labels:
+      - "com.augustash.description=August Ash Alpine PHP-FPM Magento Development Image"
+      - "com.augustash.development-only"
+    depends_on:
+      - mysql
+      - elasticsearch
+      - rabbitmq
+      - redis-sessions
+      - redis-cache
+    environment:
+      - MAGENTO_ADMIN_EMAIL=pmcwilliams@augustash.com
+      - MAGENTO_ADMIN_FIRSTNAME=August
+      - MAGENTO_ADMIN_LASTNAME=Ash
+      - MAGENTO_ADMIN_PASSWORD=Password1
+      - MAGENTO_ADMIN_USER=augustash
+      - MAGENTO_BACKEND_FRONTNAME=admin
+      - MAGENTO_BASE_URL_SECURE=true
+      - MAGENTO_BASE_URL=https://magento.test/
+      - MAGENTO_CODEBASE=open-source
+      - MAGENTO_CURRENCY=USD
+      - MAGENTO_DB_HOST=mysql
+      - MAGENTO_DB_NAME=magento2
+      - MAGENTO_DB_PASSWORD=magento
+      - MAGENTO_DB_USER=magento
+      - MAGENTO_ELASTICSEARCH_HOST=elasticsearch
+      - MAGENTO_INSTALL_DB=true
+      - MAGENTO_LANGUAGE=en_US
+      - MAGENTO_RABBITMQ_HOST=rabbitmq
+      - MAGENTO_RABBITMQ_PASS=magento
+      - MAGENTO_RABBITMQ_USER=magento
+      - MAGENTO_REDIS_CACHE_HOST=redis-cache
+      - MAGENTO_REDIS_SESSION_HOST=redis-sessions
+      - MAGENTO_REWRITES=1
+      - MAGENTO_TIMEZONE=America/Chicago
+      - MAGENTO_USE_SAMPLE_DATA=true
+      - MAGENTO_VERSION=2.3.1
+
+  mysql:
+    image: percona:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=magento2
+      - MYSQL_USER=magento
+      - MYSQL_PASSWORD=magento
+
+  elasticsearch:
+    image: augustash/alpine-elasticsearch:3.0.0
+    environment:
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "discovery.type=single-node"
+
+  rabbitmq:
+    image: rabbitmq:3.7-management
+    environment:
+      - RABBITMQ_DEFAULT_USER=magento
+      - RABBITMQ_DEFAULT_PASS=magento
+
+  redis-sessions:
+    image: redis:5.0.4-alpine
+
+  redis-cache:
+    image: redis:5.0.4-alpine
